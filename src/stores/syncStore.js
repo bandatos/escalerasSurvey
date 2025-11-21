@@ -2,13 +2,12 @@
  ** Store único para manejar el estado de sincronización de Pinia
  * Migrado de localStorage a IndexedDB
  */
-import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
 //Servicios propios:
-import { IndexedDBService } from '../services/indexDB.js'
-import { getApiSync } from '../services/apiSync.js'
-import { getNetworkDetection } from '../services/networkDetection.js'
-import { useSurveyStore } from './surveyStore.js'
+import { IndexedDBService } from '@/services/indexDB.js'
+import { getApiSync } from '@/services/apiSync.js'
+import { getNetworkDetection } from '@/services/networkDetection.js'
+
+import { useSurveyStore } from '@/stores'
 
 export const useSyncStore = defineStore('sync', () => {
   // Estado reactivo                     ⬆️id único    
