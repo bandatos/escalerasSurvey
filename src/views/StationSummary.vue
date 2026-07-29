@@ -31,20 +31,41 @@ const emit = defineEmits(["save-complete"]);
 
 // Actualizar estadísticas de sincronización al montar
 onMounted(async () => {
-  // Validar autenticación
-  if (!authStore.isAuthenticated) {
-    snackbarStore.showError("Debes autenticarte para realizar relevamientos");
-    // TODO: No sé cómo redirigir dentro de un async onMounted
-    // router.push({ name: 'login' });
-    // emit('back');
-    return;
+
+  // Si no hay relevamiento activo (ej: recarga directa en /station/:id),
+  // reconstruir el estado a partir del id de la URL.
+  if (!surveyStore.isActive) {
+    console.log("No hay relevamiento activo, reconstruyendo estado desde URL");
+    // Asegurar que el catálogo esté cargado (rawStairs / fullStations)
+    if (stationStore.fullStations.length === 0) {
+      await stationStore.init();
+    }
+
+    const stationId = Number(router.currentRoute.value.params.station_id);
+    const station = stationStore.fullStations.find((s) => s.id === stationId);
+
+    if (!station) {
+      snackbarStore.showError("No se encontró la estación");
+      router.push({ name: "Home" });
+      return;
+    }
+
+    stationStore.selectStation(station);
+    surveyStore.startSurvey(station);
   }
 
+    // Validar autenticación
+  if (!authStore.isAuthenticated) {
+    snackbarStore.showError("Debes autenticarte para realizar relevamientos");
+    router.push({ name: "Home" });
+    return;
+  }
+  
   await syncStore.updateSyncStats();
 });
 
 const { currentStairs } = storeToRefs(surveyStore);
-const { selectedStation } = stationStore;
+const { selectedStation } = storeToRefs(stationStore);
 
 // Estado local
 const expandedPanels = ref([]);
@@ -128,7 +149,8 @@ const handleSave = async () => {
 
     console.log("✅ Estación y todas las imágenes guardadas exitosamente");
     loading_station.value = false;
-    emit("save-complete");
+    snackbarStore.showSuccess("Relevamiento guardado exitosamente");
+    router.push({ name: "Home" });
   } catch (error) {
     console.error("Error guardando:", error);
     snackbarStore.showError("Error al guardar los datos");
@@ -156,7 +178,11 @@ const handleBack = () => {
         <v-card-text>
           <!-- Estación seleccionada -->
           <div class="d-flex align-center">
-            <AvatarStation :station-data="selectedStation" class="mr-3" />
+            <AvatarStation
+              v-if="selectedStation"
+              :station-data="selectedStation"
+              class="mr-3"
+            />
             <h2 class="text-subtitle-1 font-weight-bold">
               Estación {{ selectedStation?.name }}
             </h2>

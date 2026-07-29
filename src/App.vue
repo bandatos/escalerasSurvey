@@ -3,15 +3,10 @@ import MessageSnackBar from "@/components/MessageSnackBar.vue";
 import SyncStatusBar from "@/components/SyncStatusBar.vue";
 
 import { useSnackbarStore } from "@/stores/snackbarStore";
-import { useAuthStore } from "@/stores/authStore";
 const snackbarStore = useSnackbarStore();
-const authStore = useAuthStore();
 
-// Cargar sesión al iniciar la aplicación
-onMounted(() => {
-  console.log("🚀 App iniciada - verificando sesión guardada...");
-  authStore.loadSession();
-});
+// La sesión se carga en main.js (antes de montar), no aquí,
+// para que el token esté disponible en recargas directas de rutas hijas.
 
 // Estado de navegación
 const currentView = ref("map"); // 'map' | 'registerStation'
