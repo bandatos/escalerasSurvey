@@ -284,9 +284,10 @@ export class IndexedDBService {
     // Obtener imágenes de una escalera específica
     static async getStairImages(stationRecordId, number) {
         try {
+            // Dos condiciones (stationRecordId Y number) sin índice compuesto:
+            // Dexie usa el índice existente y filtra el resto.
             const images = await db.images
-                .where('[stationRecordId+number]')
-                .equals([stationRecordId, number])
+                .where({ stationRecordId: stationRecordId, number: number })
                 .sortBy('order');
             return images;
         } catch (error) {
@@ -334,8 +335,7 @@ export class IndexedDBService {
     static async deleteStairImages(stationRecordId, number) {
         try {
             const deleted = await db.images
-                .where('[stationRecordId+number]')
-                .equals([stationRecordId, number])
+                .where({ stationRecordId: stationRecordId, number: number })
                 .delete();
             console.log(`🗑️ ${deleted} imágenes eliminadas para estación ${stationRecordId}, escalera ${number}`);
             return deleted;

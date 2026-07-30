@@ -108,8 +108,9 @@ export const useSurveyStore = defineStore('survey', () => {
 
         // Sincronización con backend
         backend_id: null,
-        synced: false,
-        synced_at: null
+        synced: false, // ¿el reporte se guardó en el backend?
+        synced_at: null,
+        images_synced: false // ¿las imágenes están confirmadas en el backend?
       }
     })
     currentStairs.value = stairTemplates
@@ -140,10 +141,54 @@ export const useSurveyStore = defineStore('survey', () => {
   }
 
   /**
+   * Sube las imágenes de una escalera a su reporte YA guardado (stair.backend_id).
+   * NO crea el reporte: solo adjunta imágenes. Actualiza stair.images_synced.
+   * @param {Object} stair - Escalera con backend_id ya asignado
+   * @param {Array<File>} images - Imágenes a subir (opcional)
+   * @returns {Promise<boolean>} - true si no había nada que subir o si subió bien
+   */
+  async function uploadImagesForStair(stair, images = []) {
+    // Sin imágenes: no hay nada pendiente
+    if (!images || images.length === 0) {
+      stair.images_synced = true
+      return true
+    }
+
+    // Sin id de reporte no se pueden adjuntar (no debería pasar si synced === true)
+    if (!stair.backend_id) {
+      console.warn(`⚠️ Escalera ${stair.number} sin backend_id: no se pueden subir imágenes`)
+      stair.images_synced = false
+      return false
+    }
+
+    try {
+      console.log(`📤 Subiendo ${images.length} imágenes para escalera ${stair.number}...`)
+      const imageResponse = await stairsService.uploadStairImages(stair.backend_id, images)
+
+      // Guardar referencias de imágenes
+      stair.photo_ids = imageResponse.photo_ids || []
+      stair.image_urls = imageResponse.image_urls || []
+      stair.images_synced = true
+
+      console.log(`✅ Imágenes subidas para escalera ${stair.number}`)
+      return true
+    } catch (imageError) {
+      // Las imágenes NO se pierden: images_synced queda en false y quedan
+      // persistidas en IndexedDB para reintentarse (ver syncPendingStairs).
+      console.warn(`⚠️ Error subiendo imágenes de escalera ${stair.number}:`, imageError.message)
+      stair.images_synced = false
+      return false
+    }
+  }
+
+  /**
    * ----------Sincronzar escalera por escalera.-------
+   * Guarda el reporte y (si hay) sube las imágenes. El reporte y las imágenes
+   * se sincronizan por separado: si el reporte se guarda pero las imágenes fallan,
+   * la escalera queda synced=true / images_synced=false (pendiente de imágenes).
    * @param {Object} stair - Objeto de escalera con todos sus datos
    * @param {Array<File>} images - Array de imágenes (opcional)
-   * @returns {Promise<Object>} - { success: boolean, reportId: number, error?: string }
+   * @returns {Promise<Object>} - { success, reportId, imagesPending, error? }
    */
   async function syncSingleStair(stair, images = []) {
     try {
@@ -170,32 +215,20 @@ export const useSurveyStore = defineStore('survey', () => {
 
       console.log(`✅ Escalera ${stair.number} guardada con ID: ${savedReport.id}`)
 
-      // 2. Subir imágenes si existen
-      if (images && images.length > 0) {
-        console.log(`📤 Subiendo ${images.length} imágenes para escalera ${stair.number}...`)
-
-        try {
-          // Usar el id que me devuelve el registro una vez guardado.
-          const imageResponse = await stairsService.uploadStairImages(savedReport.id, images)
-          console.log(`✅ Imágenes subidas para escalera ${stair.number}`)
-
-          // Guardar referencias de imágenes
-          stair.photo_ids = imageResponse.photo_ids || []
-          stair.image_urls = imageResponse.image_urls || []
-        } catch (imageError) {
-          console.warn(`⚠️ Error subiendo imágenes de escalera ${stair.number}:`, imageError.message)
-          // No lanzar error, las imágenes son opcionales
-        }
-      }
-
-      // 3. Marcar como sincronizada
+      // 2. Marcar el REPORTE como sincronizado (aunque las imágenes fallen después)
       stair.backend_id = savedReport.id
       stair.synced = true
       stair.synced_at = Date.now()
 
+      // 3. Subir imágenes al reporte recién creado (no re-crea el reporte).
+      //    Si fallan, images_synced queda en false y se reintentarán aparte.
+      await uploadImagesForStair(stair, images)
+
       return {
         success: true,
-        reportId: savedReport.id
+        reportId: savedReport.id,
+        // El reporte se guardó; avisamos si las imágenes quedaron pendientes
+        imagesPending: images && images.length > 0 && stair.images_synced === false
       }
 
     } catch (error) {
@@ -227,6 +260,7 @@ export const useSurveyStore = defineStore('survey', () => {
 
       let syncedCount = 0
       let failedCount = 0
+      let imagesPendingCount = 0
 
       // Intentar sincronizar cada escalera con el backend (si hay conexión)
       if (isOnline) {
@@ -241,6 +275,7 @@ export const useSurveyStore = defineStore('survey', () => {
 
           if (result.success) {
             syncedCount++
+            if (result.imagesPending) imagesPendingCount++
           } else {
             failedCount++
           }
@@ -252,6 +287,10 @@ export const useSurveyStore = defineStore('survey', () => {
         }
         if (failedCount > 0) {
           snackbarStore.showWarning(`${failedCount} escalera(s) quedaron pendientes de sincronización`)
+        }
+        // Aviso explícito: reporte guardado pero imágenes NO subidas (antes fallaba en silencio)
+        if (imagesPendingCount > 0) {
+          snackbarStore.showWarning(`${imagesPendingCount} escalera(s) se guardaron, pero sus imágenes no se pudieron subir. Se reintentarán al sincronizar.`)
         }
       } else {
         console.log('📴 Sin conexión - guardando solo en local')
@@ -321,7 +360,11 @@ export const useSurveyStore = defineStore('survey', () => {
       allRecords.forEach(record => {
         if (record.stairs && Array.isArray(record.stairs)) {
           record.stairs.forEach((stair, index) => {
-            if (!stair.synced) {
+            const reportPending = !stair.synced
+            // Reporte ya guardado pero imágenes sin subir. Se compara === false
+            // para NO marcar registros viejos (sin el campo, undefined) como pendientes.
+            const imagesPending = stair.synced === true && stair.images_synced === false
+            if (reportPending || imagesPending) {
               pendingStairs.push({
                 stair,
                 stairIndex: index,
@@ -351,22 +394,36 @@ export const useSurveyStore = defineStore('survey', () => {
 
         console.log(`📸 ${imageFiles.length} imágenes encontradas para escalera ${stair.number} (record ${recordId})`)
 
-        // Usar la función modular para sincronizar con imágenes
-        const result = await syncSingleStair(stair, imageFiles)
-
-        if (result.success) {
-          // Actualizar el registro en IndexedDB
-          const record = allRecords.find(r => r.id === recordId)
-          if (record) {
-            await IndexedDBService.updateStationRecord(recordId, { stairs: record.stairs })
+        // Si el reporte YA existe (solo faltan imágenes), subir SOLO imágenes al
+        // backend_id existente para no duplicar el reporte. Si no, crear reporte + imágenes.
+        let success
+        if (stair.synced && stair.backend_id) {
+          // Anomalía: marcada como imágenes pendientes pero sin archivos locales.
+          // NO la marcamos como sincronizada, para no ocultar el fallo como "éxito".
+          if (imageFiles.length === 0) {
+            console.warn(`⚠️ Escalera ${stair.number}: pendiente de imágenes pero sin archivos en IndexedDB`)
+            failedCount++
+            continue
           }
+          success = await uploadImagesForStair(stair, imageFiles)
+        } else {
+          const result = await syncSingleStair(stair, imageFiles)
+          success = result.success
+        }
 
-          // Eliminar imágenes de IndexedDB ya que fueron sincronizadas exitosamente
+        // Persistir SIEMPRE el estado actualizado de la escalera (synced, backend_id,
+        // images_synced) para que un fallo parcial no reintente desde cero.
+        const record = allRecords.find(r => r.id === recordId)
+        if (record) {
+          await IndexedDBService.updateStationRecord(recordId, { stairs: record.stairs })
+        }
+
+        // Borrar imágenes locales solo cuando YA están confirmadas en el backend
+        if (success && stair.images_synced === true) {
           if (imageFiles.length > 0) {
             await IndexedDBService.deleteStairImages(recordId, stair.number)
             console.log(`🗑️ Imágenes eliminadas de IndexedDB para escalera ${stair.number}`)
           }
-
           syncedCount++
         } else {
           failedCount++
@@ -413,7 +470,9 @@ export const useSurveyStore = defineStore('survey', () => {
         if (record.stairs && Array.isArray(record.stairs)) {
           record.stairs.forEach(stair => {
             totalStairs++
-            if (stair.synced) {
+            // Pendiente si falta el reporte O si el reporte está pero las imágenes no
+            const imagesPending = stair.synced === true && stair.images_synced === false
+            if (stair.synced && !imagesPending) {
               syncedStairs++
             } else {
               pendingStairs++

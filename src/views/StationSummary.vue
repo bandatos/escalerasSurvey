@@ -120,23 +120,21 @@ const handleSave = async () => {
       const stair = currentStairs.value[stairIndex];
       const photos = imageStore.getStairPhotos(stair.id); // ✅ Usar stair.id en lugar de índice
 
-      // Solo guardar en IndexedDB si la escalera NO fue sincronizada al backend
-      if (photos && photos.length > 0 && !stair.synced) {
+      // Guardar en IndexedDB si las imágenes NO están confirmadas en el backend
+      // (reporte fallido, sin conexión, o subida de imágenes fallida) para reintentar.
+      // Se usa stair.number como clave para que syncPendingStairs las encuentre.
+      if (photos && photos.length > 0 && stair.images_synced !== true) {
         await IndexedDBService.saveStairImages(
           savedRecord.id,
-          stairIndex + 1, // number es 1-based
+          stair.number,
           photos
         );
         console.log(
-          `📸 ${photos.length} imágenes guardadas localmente para escalera ${
-            stairIndex + 1
-          } (pendiente de sync)`
+          `📸 ${photos.length} imágenes guardadas localmente para escalera ${stair.number} (pendiente de sync)`
         );
-      } else if (photos && photos.length > 0 && stair.synced) {
+      } else if (photos && photos.length > 0 && stair.images_synced === true) {
         console.log(
-          `✅ Escalera ${
-            stairIndex + 1
-          } ya sincronizada - imágenes no guardadas en IndexedDB`
+          `✅ Escalera ${stair.number} con imágenes ya sincronizadas - no guardadas en IndexedDB`
         );
       }
     }
