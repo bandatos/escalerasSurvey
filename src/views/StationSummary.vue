@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { storeToRefs } from "pinia";
 
 import { useSurveyStore } from "@/stores/surveyStore";
@@ -64,11 +64,28 @@ onMounted(async () => {
   await syncStore.updateSyncStats();
 });
 
-const { currentStairs } = storeToRefs(surveyStore);
+const { currentStairs, remainingStairs } = storeToRefs(surveyStore);
 const { selectedStation } = storeToRefs(stationStore);
 
 // Estado local
 const expandedPanels = ref([]);
+
+// Escalera elegida en el dropdown de "agregar reporte"
+const stairToAdd = ref(null);
+
+// Opciones del dropdown: descripción única (o "Escalera N" si no tuviera)
+const remainingStairOptions = computed(() =>
+  remainingStairs.value.map((s) => ({
+    id: s.id,
+    title: s.description || `Escalera ${s.number}`,
+  }))
+);
+
+// Descripción de la escalera elegida, para leerla completa antes de "Agregar"
+const selectedStairLabel = computed(() => {
+  const opt = remainingStairOptions.value.find((o) => o.id === stairToAdd.value);
+  return opt ? opt.title : "";
+});
 
 const all_status = [
   { label: "Pendiente", icon: "circle", color: "grey", key: "pending" },
@@ -93,17 +110,34 @@ function showWarning(message) {
   snackbarStore.showWarning(message);
 }
 
+// Agregar un reporte para la escalera elegida en el dropdown
+const handleAddReport = () => {
+  if (!stairToAdd.value) return;
+  const report = surveyStore.addReport(stairToAdd.value);
+  stairToAdd.value = null;
+  // Abrir el panel recién agregado (queda al final del arreglo)
+  if (report) {
+    expandedPanels.value.push(currentStairs.value.length - 1);
+  }
+};
+
+// Quitar un reporte (y resetear los paneles abiertos para no dejar índices colgados)
+const handleRemoveReport = (reportId) => {
+  surveyStore.removeReport(reportId);
+  expandedPanels.value = [];
+};
+
 // Guardar datos completos
 const handleSave = async () => {
   try {
-    // Validar que todas las escaleras estén completadas
-    const allCompleted = currentStairs.value.every(
+    // Validar que haya al menos un reporte completado
+    const someCompleted = currentStairs.value.some(
       (s) => s.status === "completed"
     );
 
-    if (!allCompleted) {
+    if (!someCompleted) {
       snackbarStore.showWarning(
-        "Debes completar todas las escaleras antes de guardar"
+        "Debes completar al menos una escalera para guardar"
       );
       return;
     }
@@ -111,13 +145,10 @@ const handleSave = async () => {
     // 1. Guardar registro de estación en IndexedDB
     const savedRecord = await surveyStore.completeSurvey();
 
-    // 2. Guardar imágenes SOLO para escaleras que NO fueron sincronizadas
-    for (
-      let stairIndex = 0;
-      stairIndex < surveyStore.total_stairs;
-      stairIndex++
-    ) {
+    // 2. Guardar imágenes de los reportes completados que NO estén ya en el backend
+    for (let stairIndex = 0; stairIndex < currentStairs.value.length; stairIndex++) {
       const stair = currentStairs.value[stairIndex];
+      if (stair.status !== "completed") continue;
       const photos = imageStore.getStairPhotos(stair.id); // ✅ Usar stair.id en lugar de índice
 
       // Guardar en IndexedDB si las imágenes NO están confirmadas en el backend
@@ -199,7 +230,7 @@ const handleBack = () => {
 
       <v-divider></v-divider>
       <v-alert type="info" density="compact" class="mb-2">
-        Completa la info en el orden en el que recorras la estación
+        Reporta al menos una escalera. Identifícala por su descripción.
       </v-alert>
 
       <!-- Expansion Panels de Escaleras -->
@@ -212,8 +243,58 @@ const handleBack = () => {
           :all_status="all_status"
           @showWarning="showWarning"
           @markComplete="markStairComplete(stair_index)"
+          @remove="handleRemoveReport(stair.id)"
         />
       </v-expansion-panels>
+
+      <!-- Agregar reporte de otra escalera -->
+      <v-card
+        v-if="remainingStairOptions.length > 0"
+        class="rounded-lg my-2"
+        variant="tonal"
+        color="primary"
+      >
+        <v-card-text>
+          <label class="text-subtitle-2 mb-2 d-block">
+            ¿Qué escalera vas a reportar?
+          </label>
+          <div class="d-flex gap-2 align-center">
+            <v-select
+              v-model="stairToAdd"
+              :items="remainingStairOptions"
+              item-title="title"
+              item-value="id"
+              variant="outlined"
+              color="primary"
+              base-color="primary"
+              bg-color="surface"
+              placeholder="Selecciona una escalera por su descripción"
+              hide-details
+            ></v-select>
+            <v-btn
+              color="primary"
+              :disabled="!stairToAdd"
+              @click="handleAddReport"
+              prepend-icon="add"
+              class="ml-2"
+            >
+              Agregar
+            </v-btn>
+          </div>
+
+          <!-- Descripción seleccionada, visible/legible antes de agregar -->
+          <v-alert
+            v-if="selectedStairLabel"
+            class="mt-3"
+            color="primary"
+            variant="tonal"
+            density="compact"
+            icon="stairs"
+          >
+            {{ selectedStairLabel }}
+          </v-alert>
+        </v-card-text>
+      </v-card>
 
       <!-- Botón guardar todo -->
       <v-card v-if="true" class="rounded-0" _variant="flat" _color="primary">
@@ -224,10 +305,10 @@ const handleBack = () => {
             block
             variant="elevated"
             :loading="loading_station"
-            :disabled="surveyStore.completedStairs < surveyStore.total_stairs"
+            :disabled="surveyStore.completedStairs < 1"
             @click="handleSave"
           >
-            Guardar datos
+            Guardar reportes
             <v-icon end>save</v-icon>
           </v-btn>
         </v-card-actions>

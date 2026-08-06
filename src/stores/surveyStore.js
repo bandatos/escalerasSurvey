@@ -21,7 +21,8 @@ export const useSurveyStore = defineStore('survey', () => {
   // Estado reactivo
   const currentSurvey = ref(null) // Relevamiento en progreso
   const currentStairIndex = ref(0) // Índice de escalera actual (0-based)
-  const currentStairs = ref([]) // Escaleras de la estación seleccionada
+  const currentStairs = ref([]) // Reportes que el usuario va agregando (1..N)
+  const stationStairs = ref([]) // Pool de escaleras de la estación (para el dropdown)
   const isSaving = ref(false)
 
 
@@ -70,50 +71,59 @@ export const useSurveyStore = defineStore('survey', () => {
     return { working, notWorking }
   })
 
+  // Escaleras aún no elegidas por ningún reporte (opciones del dropdown)
+  const remainingStairs = computed(() => {
+    const chosen = new Set(currentStairs.value.map(r => r.stair))
+    return stationStairs.value.filter(s => !chosen.has(s.id))
+  })
+
   /* Actions */
+  // Plantilla de un reporte, ligada a una escalera del catálogo ya elegida
+  function createReportTemplate(rawStair) {
+    return {
+      id: rawStair.id,          // id LOCAL del reporte (= id de catálogo, único por reporte)
+      stair: rawStair.id,       // se manda al backend como "stair"
+      number: rawStair.number,
+      description: rawStair.description || '',
+      stair_full: rawStair,
+      code_identifiers: [],
+      without_codes: false,
+
+      // Puntos de conexión
+      route_start: '',
+      path_start: '',
+      path_end: '',
+      route_end: '',
+
+      // Estado de mantenimiento
+      status_maintenance: null, // 'minor' | 'medium' | 'full' | 'other'
+      direction_observed: null,
+      other_status_maintenance: '',
+
+      // Estado operativo
+      is_working: null,
+
+      details: '',
+      photo_ids: [],
+      image_urls: [],
+      status: 'pending', // 'pending' | 'completed'
+
+      // Sincronización con backend
+      backend_id: null,
+      synced: false, // ¿el reporte se guardó en el backend?
+      synced_at: null,
+      images_synced: false // ¿las imágenes están confirmadas en el backend?
+    }
+  }
+
   // Iniciar nuevo relevamiento de estación
   function startSurvey(station) {
- 
-    currentStairs.value = stationStore.rawStairs.filter(
+    // Pool de escaleras de la estación (opciones del dropdown), cada una con su description
+    stationStairs.value = stationStore.rawStairs.filter(
       s => s.station === station.id)
 
-
-    const stairTemplates = currentStairs.value.map(s => {
-      return {
-        id: s.id,
-        stair: s.id,
-        number: s.number,
-        stair_full: s,
-        code_identifiers: [],
-        without_codes: false,
-
-        // Puntos de conexión
-        route_start: '',
-        path_start: '',
-        path_end: '',
-        route_end: '',
-
-        // Estado de mantenimiento
-        status_maintenance: null, // 'minor' | 'major' | 'critical' | 'other'
-        direction_observed: null,
-        other_status_maintenance: '',
-
-        // Estado operativo
-        is_working: null,
-
-        details: '',
-        photo_ids: [],
-        image_urls: [],
-        status: 'pending', // 'pending' | 'completed'
-
-        // Sincronización con backend
-        backend_id: null,
-        synced: false, // ¿el reporte se guardó en el backend?
-        synced_at: null,
-        images_synced: false // ¿las imágenes están confirmadas en el backend?
-      }
-    })
-    currentStairs.value = stairTemplates
+    // Los reportes arrancan vacíos: el usuario los agrega uno por uno
+    currentStairs.value = []
 
     currentSurvey.value = {
       // Datos de la estación
@@ -123,8 +133,8 @@ export const useSurveyStore = defineStore('survey', () => {
       line_color: station.line_color,
       total_stairs: station.total_stairs,
 
-      // Array de escaleras
-      stairs: stairTemplates,
+      // Array de reportes (MISMA referencia que currentStairs, para que el push se refleje)
+      stairs: currentStairs.value,
 
       // Estadísticas
       completedStairs: 0,
@@ -138,6 +148,23 @@ export const useSurveyStore = defineStore('survey', () => {
     }
 
     currentStairIndex.value = 0
+  }
+
+  // Agregar un reporte para una escalera elegida (por id de catálogo)
+  function addReport(stairId) {
+    // Evitar duplicados: una escalera solo se reporta una vez
+    if (currentStairs.value.some(r => r.stair === stairId)) return null
+    const rawStair = stationStairs.value.find(s => s.id === stairId)
+    if (!rawStair) return null
+    const report = createReportTemplate(rawStair)
+    currentStairs.value.push(report)
+    return report
+  }
+
+  // Quitar un reporte por su id local
+  function removeReport(reportId) {
+    const idx = currentStairs.value.findIndex(r => r.id === reportId)
+    if (idx > -1) currentStairs.value.splice(idx, 1)
   }
 
   /**
@@ -266,6 +293,8 @@ export const useSurveyStore = defineStore('survey', () => {
       if (isOnline) {
         for (let i = 0; i < currentStairs.value.length; i++) {
           const stair = currentStairs.value[i]
+          // Solo sincronizar reportes completados; ignorar borradores incompletos
+          if (stair.status !== 'completed') continue
           const photos = imageStore.getStairPhotos(stair.id) // ✅ Usar stair.id en lugar de índice
 
           console.log(`📸 Escalera ${stair.number} (ID: ${stair.id}): ${photos?.length || 0} foto(s) encontrada(s)`)
@@ -306,6 +335,9 @@ export const useSurveyStore = defineStore('survey', () => {
 
       // Convertir a objeto plano (sin reactividad) antes de guardar
       const plainSurvey = toPlainObject(currentSurvey.value)
+
+      // Guardar solo los reportes completados (descartar borradores incompletos)
+      plainSurvey.stairs = plainSurvey.stairs.filter(s => s.status === 'completed')
 
       // SIEMPRE guardar en IndexedDB (backup local)
       const savedRecord = await IndexedDBService.saveStationRecord(plainSurvey)
@@ -498,12 +530,14 @@ export const useSurveyStore = defineStore('survey', () => {
     currentStairIndex,
     isSaving,
     currentStairs,
+    stationStairs,
 
     // Computed
     isActive,
     total_stairs,
     completedStairs,
     pendingStairs,
+    remainingStairs,
     currentStair,
     isLastStair,
     progress,
@@ -511,6 +545,8 @@ export const useSurveyStore = defineStore('survey', () => {
 
     // Acciones
     startSurvey,
+    addReport,
+    removeReport,
     completeSurvey,
     cancelSurvey,
     syncPendingStairs,

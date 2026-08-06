@@ -23,6 +23,12 @@ const selectedStationId = ref(null);
 const showLoginDialog = ref(false);
 const pendingStation = ref(null);
 
+// Solo estaciones con al menos una escalera registrada (para el desplegable).
+// El mapa sigue usando fullStations completo.
+const stationsWithStairs = computed(() =>
+  stationStore.fullStations.filter((s) => s.total_stairs > 0)
+);
+
 onMounted(async () => {
   // Iniciando los stores.
   console.log("Inicializando stores en StationSelector.vue");
@@ -41,15 +47,6 @@ const handleSelectStation = () => {
   const station = stationStore.fullStations.find(
     (s) => s.id === selectedStationId.value
   );
-  if (station.total_stairs === 0) {
-    snackbarStore.showWarning(
-      "La estación seleccionada no tiene escaleras para relevar \n " +
-        "Por favor elige otra estación"
-    );
-    selectedStationId.value = null;
-    return;
-  }
-
   if (!station) return;
 
   // Verificar autenticación
@@ -120,7 +117,7 @@ const handleLoginCancel = () => {
         <v-card-text>
           <v-autocomplete
             v-model="selectedStationId"
-            :items="stationStore.fullStations"
+            :items="stationsWithStairs"
             item-title="name"
             item-value="id"
             label="Escribe/Selecciona una estación"
@@ -142,7 +139,7 @@ const handleLoginCancel = () => {
             </template>
 
             <template v-slot:item="{ props, item }">
-              <v-list-item v-bind="props" :diabled="!item.raw.total_stairs">
+              <v-list-item v-bind="props">
                 <template v-slot:title>
                   <span class="text-body-1 font-weight-medium">
                     {{ item.raw.name }}

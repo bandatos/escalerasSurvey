@@ -32,7 +32,7 @@ const errors = ref(null);
 const save_errors = ref([]);
 const stairForm = ref(null);
 
-const emits = defineEmits(["add-new-code", "show-warning", "mark-complete"]);
+const emits = defineEmits(["add-new-code", "show-warning", "mark-complete", "remove"]);
 
 const has_codes_rule = computed(() => {
   if (props.stair.without_codes) return true;
@@ -130,7 +130,9 @@ async function markStairComplete() {
           {{ full_status?.icon || "help_outline" }}
         </v-icon>
         <div>
-          <div class="font-weight-bold">Escalera {{ stair.number }}</div>
+          <div class="font-weight-bold">
+            {{ stair.description || "Escalera " + stair.number }}
+          </div>
           <div
             v-if="stair.status === 'completed'"
             class="text-caption text-medium-emphasis"
@@ -142,6 +144,14 @@ async function markStairComplete() {
           </div>
           <div class="text-caption text-warning" v-else>Pendiente</div>
         </div>
+        <v-btn
+          icon="delete"
+          size="small"
+          variant="text"
+          color="grey"
+          class="ml-auto"
+          @click.stop="emits('remove')"
+        ></v-btn>
       </div>
     </v-expansion-panel-title>
 
